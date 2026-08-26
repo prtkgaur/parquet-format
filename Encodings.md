@@ -679,6 +679,32 @@ For each vector:
 **Special case:** If `bit_width == 0` and `num_exceptions == 0`, all values
 equal `frame_of_reference`. Fill the output array and return.
 
+##### Reader Validation
+
+A PFOR page is read from bytes that may be truncated or corrupt, and every field
+below is used to size a read or a write. A reader MUST reject a page in which any
+of the following holds, rather than deriving a length from the field and
+continuing:
+
+| Check | Field |
+|-------|-------|
+| Fewer than 7 bytes remain for the page header | -- |
+| `packing_mode` is not 0 | packing_mode |
+| `value_byte_width` disagrees with the column type | value_byte_width |
+| `log_vector_size` is outside \[3, 15\] | log_vector_size |
+| `num_elements` is negative | num_elements |
+| `num_elements` exceeds the space the reader has for output | num_elements |
+| The offset array for `ceil(num_elements / vector_size)` vectors does not fit in the page | -- |
+| Any vector offset lands at or past the end of the page | offset array |
+| Fewer bytes remain than the vector header needs | -- |
+| `bit_width` exceeds 32 for INT32 or 64 for INT64, after masking off bit 7 | bit_width |
+| `num_exceptions` exceeds the maximum vector size | num_exceptions |
+
+The last two checks matter most, because neither field produces a short read when
+it is wrong. An over-range `bit_width` or `num_exceptions` still names a length
+the reader can act on, so without an explicit range check the reader consumes the
+wrong number of bytes and reports no error.
+
 #### Example 1: Integer Keys with an Outlier
 
 **Input:** `int32 values[8] = { 100, 102, 101, 103, 100, 99, 50000, 104 }`
