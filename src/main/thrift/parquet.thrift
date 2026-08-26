@@ -631,6 +631,9 @@ enum Encoding {
 
   /** Patched Frame of Reference encoding for INT32/INT64 columns.
       See Encodings.md for specification details.
+
+      Value 10 is left for ALP, which is proposed separately; the two proposals
+      are independent and either can land first.
    */
   PFOR = 11;
 }
