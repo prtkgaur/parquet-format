@@ -699,11 +699,19 @@ continuing:
 | Fewer bytes remain than the vector header needs | -- |
 | `bit_width` exceeds 32 for INT32 or 64 for INT64, after masking off bit 7 | bit_width |
 | `num_exceptions` exceeds the maximum vector size | num_exceptions |
+| `num_exceptions` exceeds the number of elements in this vector | num_exceptions |
+| The packed deltas and exception sections do not fit in the bytes that remain | bit_width, num_exceptions |
+| Any exception position is at or past the vector's element count | exception positions |
 
-The last two checks matter most, because neither field produces a short read when
-it is wrong. An over-range `bit_width` or `num_exceptions` still names a length
-the reader can act on, so without an explicit range check the reader consumes the
-wrong number of bytes and reports no error.
+`bit_width` and `num_exceptions` need range checks because neither produces a short
+read when it is wrong: each still names a length the reader can act on, so without
+the check the reader consumes the wrong number of bytes and reports no error.
+
+Exception positions need one for a different reason. A position indexes the output
+the reader has already sized from `num_elements`, so a position past the end is a
+write outside that buffer. Readers in memory-unsafe languages MUST validate every
+position before the patch step; readers that would raise a bounds error instead
+SHOULD still validate, so the failure names the corrupt field.
 
 #### Example 1: Integer Keys with an Outlier
 
