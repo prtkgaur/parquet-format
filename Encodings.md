@@ -510,8 +510,8 @@ Data section sizes:
 | Offset | Field | Size | Type | Description |
 |--------|-------|------|------|-------------|
 | 0 | frame_of_reference | 4 bytes | int32 | Minimum value in the vector |
-| 4 | bit_width | 1 byte | uint8 | Bits per packed delta value. Range: \[0, 32\]. |
-| 5 | num_exceptions | 2 bytes | uint16 | Number of exception values in this vector. |
+| 4 | bit_width | 1 byte | uint8 | Bits per packed delta value in bits 0..6; bit 7 reserved. Range: \[0, 32\]. |
+| 5 | num_exceptions | 2 bytes | uint16 | Number of exception values in this vector. At most the number of elements in the vector. |
 
 ###### PforVectorInfo for INT64 (11 bytes)
 
@@ -526,8 +526,27 @@ Data section sizes:
 | Offset | Field | Size | Type | Description |
 |--------|-------|------|------|-------------|
 | 0 | frame_of_reference | 8 bytes | int64 | Minimum value in the vector |
-| 8 | bit_width | 1 byte | uint8 | Bits per packed delta value. Range: \[0, 64\]. |
-| 9 | num_exceptions | 2 bytes | uint16 | Number of exception values in this vector. |
+| 8 | bit_width | 1 byte | uint8 | Bits per packed delta value in bits 0..6; bit 7 reserved. Range: \[0, 64\]. |
+| 9 | num_exceptions | 2 bytes | uint16 | Number of exception values in this vector. At most the number of elements in the vector. |
+
+**The bit_width byte.** Bits 0..6 hold the width; bit 7 is reserved. Writers MUST
+write bit 7 as 0, and readers MUST mask it off before comparing the width against
+the type's maximum, so that a later revision can claim the bit without
+invalidating buffers written today.
+
+The width takes seven bits rather than six because its range is 0..64 inclusive,
+and 64 does not fit in six. Masking with six bits reads an INT64 vector whose
+deltas need the full 64 bits as width 0. Such a vector also has no exceptions, so the
+mis-read looks exactly like a constant vector: the reader fills the output with
+the frame of reference, and neither a size mismatch nor an error reveals the
+corruption.
+
+**The num_exceptions field is unsigned.** The validation bound is the vector
+size, which reaches 32768 -- one past the maximum of a signed 16-bit field. An
+encoder does not reach that bound in practice, because the element equal to the
+frame of reference has a delta of 0 and so is never an exception, capping the
+count at one less than the element count. The field is unsigned so that the
+bound is representable rather than wrapping to a negative number.
 
 ###### PackedValues
 
@@ -594,7 +613,12 @@ which always uses the bit width of the maximum delta.
    * `16` = bits for exception position (uint16)
    * `value_byte_width * 8` = bits for exception value (32 or 64)
 
-3. Select the bit width `b` that minimizes `total_cost_b`.
+3. Select the bit width `b` that minimizes `total_cost_b`, among those whose
+   `num_exceptions_b` the `num_exceptions` field can hold. A width that would
+   overflow the field MUST be skipped even if its cost is lowest. The vector size
+   bounds `num_exceptions_b`, so no width is skipped at the vector sizes this
+   format permits; the constraint matters only for a writer that raises the
+   vector size beyond them.
 
 **Implementation note:** The histogram can be accumulated incrementally. Starting
 from `b = max_bits` and working downward, `num_exceptions` accumulates as each
@@ -816,6 +840,8 @@ page_bytes = 7                                   // page header
 | Constant            | Value   | Description                             |
 |---------------------|---------|-----------------------------------------|
 | Vector size         | 1024    | Default elements per compressed vector  |
+| Min vector size     | 8       | log\_vector\_size 3                     |
+| Max vector size     | 32,768  | log\_vector\_size 15                    |
 | INT32 max bit width | 32      | Maximum bits for uint32 delta           |
 | INT64 max bit width | 64      | Maximum bits for uint64 delta           |
-| Max exceptions      | 65,535  | uint16 limit per vector                 |
+| Max exceptions      | 32,768  | Bounded by the maximum vector size      |
