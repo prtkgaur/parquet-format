@@ -718,27 +718,39 @@ Compared to PLAIN encoding (1024 * 4 = 4,096 bytes) -- 3.9x compression.
 
 #### Example 3: Date Key Column (TPC-DS pattern)
 
-1024 date key values (INT32) ranging from 2,450,815 to 2,453,005 with a few
-outlier keys at 2,415,022 (null sentinel) interspersed.
+1024 date key values (INT32). 1014 of them fall in the tight range 2,450,815 to
+2,453,005; the remaining 10 are a far-off key at 2,488,798.
 
 | Metric        | Value       | Calculation                                 |
 |---------------|-------------|---------------------------------------------|
-| FOR min       | 2,415,022   | The null sentinel is the minimum             |
-| Max delta     | 37,983      | 2,453,005 - 2,415,022                       |
-| Plain FOR bw  | 16          | ceil(log2(37984)) = 16 bits                 |
-| PFOR bw       | 11          | ceil(log2(2191)) = 11 for range 2450815-2453005 |
-| Exceptions    | ~10         | The null sentinel outliers                   |
+| FOR min       | 2,450,815   | The bottom of the tight range               |
+| Max delta     | 37,983      | 2,488,798 - 2,450,815                       |
+| Plain FOR bw  | 16          | bits\_required(37,983) = 16                 |
+| PFOR bw       | 12          | bits\_required(2,190) = 12, covering the tight range |
+| Exceptions    | 10          | The far-off keys, whose deltas exceed the 12-bit mask |
 
-**Size Comparison:**
+The cost model prefers 12 bits: `1024 * 12 + 10 * 48` = 12,768 bits against
+`1024 * 16` = 16,384 bits for the width that needs no exceptions.
+
+**Size Comparison** (one vector; page header and offset array excluded):
 
 | Encoding      | Packed + Exc | Overhead | Total        | Ratio  |
 |---------------|-------------|----------|--------------|--------|
 | PLAIN         | 4,096 B     | 0 B      | 4,096 bytes  | 1.0x   |
 | Plain FOR     | 2,048 B     | 7 B      | 2,055 bytes  | 0.50x  |
-| PFOR          | 1,408 B     | 67 B     | 1,482 bytes  | 0.36x  |
+| PFOR          | 1,536 B     | 67 B     | 1,603 bytes  | 0.39x  |
 
-PFOR achieves 28% better compression than plain FOR by narrowing the bit width
-from 16 to 11 and storing 10 exceptions.
+PFOR is 22% smaller than plain FOR here: the bit width drops from 16 to 12, and
+the 10 exceptions cost 60 bytes against the 512 bytes saved.
+
+**Outliers must lie above the cluster.** The gain comes from excluding the
+outliers from the packed width, and only values greater than the mask can be
+excluded. A null sentinel *below* the cluster -- the more common TPC-DS shape --
+becomes the frame of reference itself, so its delta is 0 and it can never be an
+exception, while every clustered value now sits a sentinel-sized distance above
+the frame. PFOR then picks the same width plain FOR would and saves nothing.
+Encoders that want to compress that shape have to keep the sentinel out of the
+vector, which this encoding does not do on its own.
 
 #### Characteristics
 
@@ -761,6 +773,9 @@ from 16 to 11 and storing 10 exceptions.
 * Uniformly distributed random integers (no outliers to exploit)
 * Very small datasets (header overhead dominates)
 * Data where all values require the same bit width (PFOR reduces to plain FOR)
+* Outliers that sit below the cluster rather than above it, such as a low null
+  sentinel: the minimum becomes the frame of reference and cannot be an
+  exception, so PFOR reduces to plain FOR
 
 **Comparison with other encodings:**
 
